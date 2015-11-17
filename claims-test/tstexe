@@ -1,0 +1,108 @@
+#!/bin/sh
+
+function handle_param()
+{
+ for param in $*
+ do
+  prm=${param%=*}
+  res=${param##*=}  
+  case $prm in
+   "--suite")
+    suites=$res
+    ;;
+   "--suites")
+    suites=$res
+    ;;
+   "--test")
+    casename=$res
+    ;;
+   "--password")
+    password=$res
+    ;;
+    "--ip")
+    host=$res
+    ;;
+    "--port")
+    port=$res
+    ;;
+    *)
+     echo -e "\033[31millegal parameter: $param\033[0m"
+    ;;
+  esac
+ done
+}
+
+function run()
+{
+if [ "$suites" != "" ]; then
+ runsuite; 
+elif [ "$casename" = "" ]; then
+ suites='t'
+ runsuite;
+fi
+
+if [ "$casename" != "" ]; then
+ runcases;
+fi
+}
+
+function setdefault()
+{
+ if [ "$password" = "" ]; then
+  password='imdb'
+ fi
+ if [ "$host" = "" ]; then
+  host='127.0.0.1'
+ fi
+ if [ "$port" = "" ]; then
+  port='10000'
+ fi
+}
+
+function runsuite()
+{
+ suites=${suites//,/ } 
+ for suite in $suites
+ do
+  echo -e "\033[33msuite: $suite\033[0m"
+  suitepath=`find -name $suite`
+  if [ "$suitepath" = "" ]; then
+   echo "$suite not exit"
+  else
+   testcases=`ls ${suitepath}/*.test`
+   for testcase in $testcases
+   do
+    tstcse=${testcase%.test*}
+    tstcse=${tstcse##*/}
+    echo -e "\033[36mtest :\033[0m \033[32m${tstcse}\033[0m"
+    echo "${password}" | sudo -S ./exec/mysqltest --host=$host --port=$port --tmpdir=./var/tmp --logdir=./var/log --test-file=${testcase} --tail-lines=20 --result-file=./r/${tstcse}.result
+   done
+  fi
+ done
+}
+
+function runcases()
+{
+ casename=${casename//,/ }
+ for cse in $casename
+ do
+  testcase=`find -name $cse.test`
+  if [ "$testcase" != "" ]; then
+   tstcse=${testcase%.test*}
+   tstcse=${tstcse##*/}
+   echo -e "\033[36mtest :\033[0m \033[32m${tstcse}\033[0m"
+   echo ${password} | sudo -S ./exec/mysqltest --host=$host --port=$port --tmpdir=./var/tmp --logdir=./var/log --test-file=${testcase} --tail-lines=20 --result-file=./r/${tstcse}.result
+  else
+   echo -e "\033[33mcase [$cse] not exit.\033[0m"
+  fi
+ done
+}
+
+function main()
+{
+ handle_param $*;
+ setdefault;
+ run;
+}
+
+main $*;

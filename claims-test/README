@@ -1,0 +1,20 @@
+1. create a new directory <suitename> as a suite in ./t/
+   create a test case named <testcase> in path ./t/ or your <suitename> directory
+	 <testname>.test
+    
+2. give your result in path ./r/ with the name : 
+	<testname>.result
+3. run tests:
+	1) start your claimsserver firstly
+	2) ./tstexe --test=<testname>,<testname>... --password=<rootpassword> 
+           ./tstexe --suite=<suitename>,<suitename>... --password=<rootpassword>
+           ./tstexe --suite=<suitename>... --test=<testname> --password=<rootpassword> 
+           --ip=<ipaddress> --port=<port>
+          default ip:127.0.0.1 
+          default port:10000
+          default password:imdb
+         
+4. "ok" will be print if the test case pass without errors.
+   else print result "not ok", and give the 
+	<testcase>.reject 
+   in path ./var/log

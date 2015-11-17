@@ -61,7 +61,7 @@ public:
 
 	void getTables(ostringstream &ostr) const;
 	int getTableSize() const;
-	ProjectionDescriptor* getProjection(const ProjectionID&) const;
+	ProjectionDescriptor* getProjection(const ProjectionID&) const; // add description for showing tables and their projection
 	ProjectionBinding* getBindingModele()const;
 
 	unsigned getTableCount()const {return table_id_allocator.table_id_curosr;};
@@ -76,7 +76,7 @@ public:
 	vector<PartitionID> getPartitionIDList(const std::string& table_name, const std::string& attribute_name);
 
 private:
-	Catalog();
+	Catalog(); // avoiding generate more instance
 	TableIDAllocator table_id_allocator;
 
 	boost::unordered_map<std::string,TableDescriptor*> name_to_table;

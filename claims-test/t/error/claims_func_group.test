@@ -1,0 +1,84 @@
+create table t1 (grp int, a int , c char(10) );
+create projection on t1(grp, a, c) number = 1 partitioned on a;
+insert into t1 values (1,1,"a");
+insert into t1 values (2,2,"b");
+insert into t1 values (2,3,"c");
+insert into t1 values (3,4,"E");
+insert into t1 values (3,5,"C");
+insert into t1 values (3,6,"D");
+
+select sum(a) from t1 where a > 10;
+select a from t1 order by rand(10);
+
+drop table t1;
+
+#
+# Problem with std()
+#
+
+CREATE TABLE t1 (id int(11),value1 float(10,2));
+create projection on t1(id, value1) number = 1 partitioned on id;
+INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00); 
+CREATE TABLE t2 (id int(11),name char(20)); 
+create projection on t2(id, name) number = 1 partitioned on id;
+INSERT INTO t2 VALUES (1,'Set One'),(2,'Set Two'); 
+select id, avg(value1) from t1 group by id;
+#select name, avg(value1) from t1, t2 where t1.id = t2.id group by t1.id;
+drop table t1,t2;
+
+#
+# test of count
+#
+create table t1 (a smallint(6), c char(10), b char(10));
+create projection on t1(a, c, b) number = 1 partitioned on a;
+INSERT INTO t1 VALUES (1,'1','1');
+INSERT INTO t1 VALUES (2,'2','2');
+INSERT INTO t1 VALUES (4,'4','4');
+
+select count(*) from t1;
+select count(*) from t1 where a = 1;
+select count(*) from t1 where a = 100;
+select count(*) from t1 where a >= 10;
+select count(a) from t1 where a = 1;
+select count(a) from t1 where a = 100;
+select count(a) from t1 where a >= 10;
+select count(b) from t1 where b >= 2;
+select count(b) from t1 where b >= 10;
+select count(c) from t1 where c = 10;
+drop table t1;
+
+#
+# Another SUM() problem with 3.23.2
+#
+
+create table t1 (
+        num float(5,2),
+        user char(20)
+);
+create projection on t1(num, user) number =1 partitioned on num;
+insert into t1 values (10.3,'nem'),(20.53,'monty'),(30.23,'sinisa');
+insert into t1 values (30.13,'nem'),(20.98,'monty'),(10.45,'sinisa');
+insert into t1 values (5.2,'nem'),(8.64,'monty'),(11.12,'sinisa');
+select sum(num) from t1;
+select sum(num) from t1 group by user;
+drop table t1;
+
+create table t1 ( f3 date, f4 datetime);
+create projection on t1(f3, f4) number = 1 partitioned on f3;
+insert into t1 values
+  (19980101,"1998-01-01 00:00:00"),
+  (20000101,"2000-01-01 00:00:01"),
+  (20020101,"2002-01-01 23:59:59"),
+  (20600101,"2060-01-01 11:11:11"),
+  (19700101,"1970-11-11 22:22:22");
+select min(f3),max(f3) from t1;
+select min(f4),max(f4) from t1;
+drop table t1;
+
+CREATE TABLE t1(c1 TIME);
+CREATE PROJECTION ON t1(c1) number = 1 partitioned on c1;
+INSERT INTO t1 VALUES('837:59:59');
+INSERT INTO t1 VALUES('838:59:59');
+SELECT MAX(c1) FROM t1;
+DROP TABLE t1;
+

@@ -1,0 +1,128 @@
+CREATE TABLE t1 (Period int,Varor_period int) ;
+create table successfully
+CREATE PROJECTION on t1 (Period , Varor_period) number = 1 partitioned on Period;
+create projection successfully
+INSERT INTO t1 VALUES (9410,9412);
+insert data successfully. 1 rows changed.
+INSERT INTO t1 VALUES (410,412);
+insert data successfully. 1 rows changed.
+INSERT INTO t1 VALUES (941,941);
+insert data successfully. 1 rows changed.
+INSERT INTO t1 VALUES (910,912);
+insert data successfully. 1 rows changed.
+INSERT INTO t1 VALUES (940,942);
+insert data successfully. 1 rows changed.
+INSERT INTO t1 VALUES (9410,9412);
+insert data successfully. 1 rows changed.
+select Period from t1;
+t1.Period
+9410	
+410	
+941	
+910	
+940	
+9410	
+select * from t1;
+t1.row_id	t1.Period	t1.Varor_period
+0	9410	9412	
+1	410	412	
+2	941	941	
+3	910	912	
+4	940	942	
+5	9410	9412	
+select t1.* from t1;
+t1.row_id	t1.Period	t1.Varor_period
+0	9410	9412	
+1	410	412	
+2	941	941	
+3	910	912	
+4	940	942	
+5	9410	9412	
+CREATE TABLE t2 (auto int, 
+fld1 int, 
+companynr int, 
+fld3 char(30), 
+fld4 char(35), 
+fld5 char(35), 
+fld6 char(4) );
+create table successfully
+CREATE PROJECTION on t2(auto, fld1, companynr, fld3, fld4, fld5, fld6) number = 1 partitioned on auto;
+create projection successfully
+select t2.fld3,companynr from t2 where companynr = 57+1 order by fld3;
+t2.fld3	t2.companynr
+Eurydice	58	
+Huey	58	
+Phelps	58	
+Ruth	58	
+Shylock	58	
+concoct	58	
+druggists	58	
+engrossing	58	
+exclaimers	58	
+ferociousness	58	
+hopelessness	58	
+imaginable	58	
+judges	58	
+merging	58	
+ostrich	58	
+peering	58	
+presumes	58	
+sentences	58	
+straggled	58	
+synergy	58	
+thanking	58	
+tying	58	
+unlocks	58	
+select fld3,companynr from t2 where companynr = 58 order by fld3;
+t2.fld3	t2.companynr
+Eurydice	58	
+Huey	58	
+Phelps	58	
+Ruth	58	
+Shylock	58	
+concoct	58	
+druggists	58	
+engrossing	58	
+exclaimers	58	
+ferociousness	58	
+hopelessness	58	
+imaginable	58	
+judges	58	
+merging	58	
+ostrich	58	
+peering	58	
+presumes	58	
+sentences	58	
+straggled	58	
+synergy	58	
+thanking	58	
+tying	58	
+unlocks	58	
+select fld3 from t2 order by fld3 desc limit 10;
+t2.fld3
+youthfulness	
+yelped	
+workers	
+witchcraft	
+willed	
+wildcats	
+widens	
+whiteness	
+whiteners	
+whistled	
+select fld3 from t2 order by fld3 desc limit 5;
+t2.fld3
+youthfulness	
+yelped	
+workers	
+witchcraft	
+willed	
+select fld3 from t2 order by fld3 desc limit 5,5;
+t2.fld3
+wildcats	
+widens	
+whiteness	
+whiteners	
+whistled	
+drop table t1, t2;
+drop table successfully!

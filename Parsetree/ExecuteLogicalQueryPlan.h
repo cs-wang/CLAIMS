@@ -8,16 +8,18 @@
 #ifndef EXECUTELOGICALQUERYPLAN_H_
 #define EXECUTELOGICALQUERYPLAN_H_
 #include <string>
+#include "./sql_node_struct.h"
 #include "../common/Block/ResultSet.h"
-#include "sql_node_struct.h"
 #include "../common/data_type.h"
 #include "../Catalog/table.h"
-#include <iosfwd>
+#include "../logical_operator/logical_operator.h"
+
+using claims::logical_operator::LogicalOperator;
+
 
 #define _DELETE_DATA_SUPPORT_
 
 
-class LogicalOperator;
 
 struct query_result{
 	query_result():result_set(0){};

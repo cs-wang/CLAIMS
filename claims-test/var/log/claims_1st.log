@@ -1,0 +1,13 @@
+SHOW TABLES;
+TABLES:
+
+CREATE TABLE t1(a int);
+create table successfully
+CREATE PROJECTION ON t1(a) NUMBER = 1 PARTITIONED ON a;
+create projection successfully
+SHOW TABLES;
+TABLES:
+t1
+
+DROP TABLE t1;
+drop table successfully!

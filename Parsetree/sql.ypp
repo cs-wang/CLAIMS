@@ -6,7 +6,7 @@
 
 %glr-parser
 %expect 8
-%expect-rr 80
+%expect-rr 81
 %defines
 %{
 #include <stdlib.h>
@@ -621,7 +621,9 @@ opt_as: /* nil */
 
 opt_as_alias: AS NAME { $$=$2; /*puts("opt_as_alias1");*/ }
   | NAME              { $$=$1; /*puts("opt_as_alias2");*/ }
-  | /* nil */         { $$=NULL; /*puts("opt_as_alias3");*/ }
+  | AS STRING 		  { $$ = $2; /*puts("opt_as_alias3");*/ }
+  | STRING 			  { $$ = $1; /*puts("opt_as_alias4");*/ }	
+  | /* nil */         { $$=NULL; /*puts("opt_as_alias5");*/ }
   ;
 
 /*
