@@ -1,0 +1,38 @@
+#本机IP地址
+ip = "127.0.0.1";
+
+#端口范围（调试用）
+PortManager:
+{
+    start = 19000;
+    end   = 19500;
+}
+
+#master的IP地址和端口
+coordinator:
+{
+    ip="127.0.0.1"
+    port="11001"
+}
+
+client_listener_port = 10000
+
+# whether this instance is the master.
+master = 1
+
+#hadoop上的数据目录
+data = "/home/imdb/data/test/"
+
+#最大单机算子并行度
+max_degree_of_parallelism=1
+
+#初始单机算子并行度
+initial_degree_of_parallelism=1
+
+expander_adaptivity_check_frequency=1000
+
+enable_expander_adaptivity=0
+
+#
+local_disk_mode = 1
+
