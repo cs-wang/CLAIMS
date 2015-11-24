@@ -138,6 +138,7 @@ TEST_F(ElasticIteratorModelTest,FilteredJoin){
 	delete b_it;
 }
 
+#if 0
 //delete data test.
 TEST_F(ElasticIteratorModelTest,createTable){
 
@@ -173,7 +174,7 @@ P_COMMENT varchar(23)\
 
 }
 
-#if 1
+
 TEST_F(ElasticIteratorModelTest,createprojection){
 
 	string createprojectionsql="create projection on PART2(\
