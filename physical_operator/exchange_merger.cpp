@@ -409,22 +409,37 @@ bool ExchangeMerger::SerializeAndSendPlan() {
 }
 
 bool ExchangeMerger::CreateReceiverThread() {
-  int error = 0;
-  error = pthread_create(&receiver_thread_id_, NULL, Receiver, this);
-  if (0 != error) {
+
+  if (true == g_thread_pool_used) {
+	Environment::getInstance()->getThreadPool()->AddTask(Receiver,
+														  this);
+	LOG(INFO) << "ExchangeMerger::CreateReceiverThread add task Receiver" << endl;
+  } else {
+	int error = 0;
+	error = pthread_create(&receiver_thread_id_, NULL, Receiver, this);
+    if (0 != error) {
     LOG(ERROR) << " exchange_id = " << state_.exchange_id_
                << " partition_offset = " << partition_offset_
                << " merger Failed to create receiver thread." << endl;
     return false;
   }
+  }
+
   return true;
 }
 void ExchangeMerger::CancelReceiverThread() {
   pthread_cancel(receiver_thread_id_);
   void* res = 0;
-  while (res != PTHREAD_CANCELED) {
-    pthread_join(receiver_thread_id_, &res);
+  //  while (res != PTHREAD_CANCELED) {
+  pthread_join(receiver_thread_id_, &res);
+  //  }
+  if (res == 0) {
+    LOG(ERROR) << " exchange_id = " << state_.exchange_id_
+               << " partition_offset = " << partition_offset_
+               << " receiver thread id= " << receiver_thread_id_
+               << " merger Failed to cancel receiver thread." << endl;
   }
+  receiver_thread_id_ = 0;
 }
 
 /**

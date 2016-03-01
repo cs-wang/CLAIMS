@@ -362,6 +362,7 @@ bool ExchangeSenderMaterialized::CreateWorkerThread() {
   if (true == g_thread_pool_used) {
     Environment::getInstance()->getThreadPool()->AddTask(MaterializeAndSend,
                                                           this);
+	LOG(INFO) << "CreateWorkerThread add task" << endl; 
   } else {
     int error;
     error = pthread_create(&sender_thread_id_, NULL, MaterializeAndSend, this);

@@ -129,6 +129,11 @@ bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
   LOG(INFO) << "successfully !" << std::endl;
 
   /** create the Sender thread **/
+  if (true == g_thread_pool_used) {
+	Environment::getInstance()->getThreadPool()->AddTask(Sender,
+														  this);
+	LOG(INFO) << "ExchangeSenderPipeline::Open add task Sender" << endl;
+  } else {
   int error;
   error = pthread_create(&sender_thread_id_, NULL, Sender, this);
   if (error != 0) {
@@ -137,6 +142,7 @@ bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
                << " ) Failed to create the sender thread>>>>>>>>>>"
                << std::endl;
     return false;
+  }
   }
   return true;
 }

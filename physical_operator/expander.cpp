@@ -311,6 +311,7 @@ bool Expander::CreateWorkingThread() {
     if (true == g_thread_pool_used) {
       Environment::getInstance()->getThreadPool()->AddTask(ExpandedWork,
                                                             &para);
+	  LOG(INFO) << "Expander::CreateWorkingThread add task ExpandedWork" << endl; 
     } else {
       const int error = pthread_create(&tid, NULL, ExpandedWork, &para);
       if (error != 0) {
