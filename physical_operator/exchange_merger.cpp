@@ -419,20 +419,13 @@ bool ExchangeMerger::SerializeAndSendPlan() {
 }
 
 bool ExchangeMerger::CreateReceiverThread() {
-
-  if (true == g_thread_pool_used) {
-	Environment::getInstance()->getThreadPool()->AddTask(Receiver,
-														  this);
-	LOG(INFO) << "ExchangeMerger::CreateReceiverThread add task Receiver" << endl;
-  } else {
-	int error = 0;
-	error = pthread_create(&receiver_thread_id_, NULL, Receiver, this);
+    int error = 0;
+    error = pthread_create(&receiver_thread_id_, NULL, Receiver, this);
     if (0 != error) {
     LOG(ERROR) << " exchange_id = " << state_.exchange_id_
                << " partition_offset = " << partition_offset_
                << " merger Failed to create receiver thread." << endl;
     return false;
-  }
   }
 
   return true;
