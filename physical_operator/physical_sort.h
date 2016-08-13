@@ -32,22 +32,34 @@
 
 #include <algorithm>
 #include <iterator>
+#include <stack>
+#include <utility>
 #include <vector>
 
-#include "../physical_operator/physical_operator_base.h"
+#include "../physical_operator/physical_operator.h"
 #include "../common/Schema/Schema.h"
 #include "../configure.h"
 #include "../common/Block/BlockStream.h"
 #include "../common/Block/DynamicBlockBuffer.h"
+#include "../common/expression/expr_node.h"
+
+#include "../utility/lock.h"
 #include "../utility/rdtsc.h"
+using claims::common::DataTypeOperFunc;
+using claims::common::ExprEvalCnxt;
+using std::vector;
+using std::pair;
+using claims::common::ExprNode;
+using claims::common::OperFuncInfo;
+
 namespace claims {
 namespace physical_operator {
-
+#define NEWCONDI
 /**
  * @brief Method description: Physical Operator "sort", is used to sort a
  *                            table due to current rules.
  */
-class PhysicalSort : public PhysicalOperatorBase {
+class PhysicalSort : public PhysicalOperator {
  public:
   class State {
     friend class PhysicalSort;
@@ -58,32 +70,34 @@ class PhysicalSort : public PhysicalOperatorBase {
      * @brief Method description: Construct the State with paras, not used in
      *                            the current version.
      */
-    State(Schema* input, vector<unsigned> orderbyKey,
-          PhysicalOperatorBase* child, const unsigned block_size,
-          vector<int> direction, const PartitionOffset partitoin_offset = 0);
+    State(Schema* input_schema, PhysicalOperatorBase* child,
+          const unsigned block_size,
+          vector<std::pair<ExprNode*, int>> order_by_attrs,
+          const PartitionOffset partitoin_offset = 0);
     State(const State& r)
-        : input_(r.input_),
-          order_by_key_(r.order_by_key_),
+        : input_schema_(r.input_schema_),
           child_(r.child_),
           block_size_(r.block_size_),
           partition_offset_(r.partition_offset_),
-          direction_(r.direction_) {}
+          order_by_attrs_(r.order_by_attrs_) {}
 
    public:
-    // TODO(anyone): fixed and varible schema both needed!
-    Schema* input_;
-    vector<unsigned> order_by_key_;
+    Schema* input_schema_;
     PhysicalOperatorBase* child_;
     unsigned block_size_;
     PartitionOffset partition_offset_;
-    vector<int> direction_;
+    vector<std::pair<ExprNode*, int>> order_by_attrs_;
+    vector<std::pair<ExprNode*, int>> order_by_attrs_copy_;
+
+    DataTypeOperFunc (*compare_funcs_)[2];
+    ExprEvalCnxt eecnxt_, eecnxt1_;
 
    private:
     friend class boost::serialization::access;
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-      ar& input_& order_by_key_& child_& block_size_& partition_offset_&
-          direction_;
+      ar& input_schema_& child_& block_size_& partition_offset_&
+          order_by_attrs_;
     }
   };
 
@@ -97,23 +111,23 @@ class PhysicalSort : public PhysicalOperatorBase {
    *          partiton the function operates on.
    * @return  true in all cases.
    */
-  bool Open(const PartitionOffset& part_off = 0);
+  bool Open(SegmentExecStatus* const exec_status,
+            const PartitionOffset& part_off = 0);
   /**
    * @brief Method description: Send the sorted data to father operator.
    * @param   BlockStreamBase *block, the info of block
    * @return  false if there's no tuple to function and the block is empty,
    *          otherwise true.
    */
-  bool Next(BlockStreamBase* block);
+  bool Next(SegmentExecStatus* const exec_status, BlockStreamBase* block);
   /**
    * @brief Method description: Close child opertor.
    * @return  true.
    */
-  bool Close();
+  bool Close(SegmentExecStatus* const exec_status);
   void Print();
 
  private:
-  void Swap(void*& desc, void*& src);
   /**
    * @brief Method description: To compare the two tuples by the column and the
    *                            compare type(asc/desc) of a sort method.
@@ -124,7 +138,7 @@ class PhysicalSort : public PhysicalOperatorBase {
    *                            only visit static paras, so we introduce static
    *                            pointers sort_order_by_key_pos and sort_state_.
    */
-  static bool Compare(const void*, const void*);
+  static bool Compare(void*, void*);
   /**
    * @brief Method description: Order the data from the inferior to the prior
    *                            sort method.
@@ -134,38 +148,31 @@ class PhysicalSort : public PhysicalOperatorBase {
    * @brief Method description: Create a block according to state_.input_ and
    *                            state_.block_size_.
    */
-  bool CreateBlockStream(BlockStreamBase*&) const;
+  bool CreateBlock(BlockStreamBase*&) const;
+  RetCode GetAllSegments(stack<Segment*>* all_segments);
 
  private:
   State state_;
   /* store the data in the buffer!*/
-  DynamicBlockBuffer block_buffer_;
-  /* create a iterator to traverse the buffer!*/
-  DynamicBlockBuffer::Iterator block_buffer_iterator_;
-
-  unsigned finished_thread_count_;
-  unsigned registered_thread_count_;
-  semaphore sema_open_;
-
-  int swap_num_;
-  unsigned temp_cur_;
-  volatile bool open_finished_;
-  semaphore sema_open_finished_;
+  DynamicBlockBuffer* block_buffer_;
+  unsigned all_cur_;
+  int64_t thread_id_;
+  vector<void*> all_tuples_;
   // TODO(anyone): use malloc to get the continuous memory
-  vector<void*> tuple_vector_;
-  unsigned order_by_key_pos_;
+  Lock* lock_;
   /**
    *  Because function compare can only operates on static paras, we need those
    *  below.
    */
-  static unsigned* sort_order_by_key_pos_;
-  static State* sort_state_;
+  static State* cmp_state_;
+  static OperFuncInfo fcinfo;
+  static unsigned order_by_pos_;
 
  private:
   friend class boost::serialization::access;
   template <class Archive>
   void serialize(Archive& ar, const unsigned int version) {
-    ar& boost::serialization::base_object<PhysicalOperatorBase>(*this) & state_;
+    ar& boost::serialization::base_object<PhysicalOperator>(*this) & state_;
   }
 };
 

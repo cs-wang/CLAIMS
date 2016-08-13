@@ -29,7 +29,9 @@
 #ifndef LOGICAL_OPERATOR_LOGICAL_EQUAL_JOIN_H_
 #define LOGICAL_OPERATOR_LOGICAL_EQUAL_JOIN_H_
 #include <vector>
-#include "../Catalog/Attribute.h"
+#include "../common/expression/expr_node.h"
+#include "../catalog/attribute.h"
+#include "../catalog/partitioner.h"
 #include "../logical_operator/logical_operator.h"
 #include "../physical_operator/physical_sort.h"
 
@@ -71,7 +73,10 @@ class LogicalEqualJoin : public LogicalOperator {
    * @param  LogicalOperator* right_input
    */
   LogicalEqualJoin(std::vector<JoinPair>, LogicalOperator* left_input,
-            LogicalOperator* right_input);
+                   LogicalOperator* right_input);
+  LogicalEqualJoin(std::vector<JoinPair> joinpair_list,
+                   LogicalOperator* left_input, LogicalOperator* right_input,
+                   vector<ExprNode*> join_condi);
   virtual ~LogicalEqualJoin();
   /**
    * @brief Method description: Get the child information.
@@ -105,8 +110,6 @@ class LogicalEqualJoin : public LogicalOperator {
  private:
   std::vector<unsigned> GetLeftJoinKeyIds() const;
   std::vector<unsigned> GetRightJoinKeyIds() const;
-  std::vector<unsigned> GetLeftPayloadIds() const;
-  std::vector<unsigned> GetRightPayloadIds() const;
   int GetIdInLeftJoinKeys(const Attribute&) const;
   int GetIdInLeftJoinKeys(
       const Attribute&,
@@ -118,7 +121,8 @@ class LogicalEqualJoin : public LogicalOperator {
   int GetIdInAttributeList(const std::vector<Attribute>& attributes,
                            const Attribute&) const;
   bool IsHashOnLeftKey(const Partitioner& part, const Attribute& key) const;
-
+  void DecideJoinPolicy(const PlanContext& left_context,
+                        const PlanContext& right_context);
   /**
    * @brief Method description:Check whether the partitioning is based on hash
    * and the hash key is a subset of the join keys such that hash join is
@@ -127,9 +131,8 @@ class LogicalEqualJoin : public LogicalOperator {
    * @param const DataflowPartitioningDescriptor& partitoiner
    * @return bool
    */
-  bool CanOmitHashRepartition(
-      const std::vector<Attribute>& join_key_list,
-      const PlanPartitioner& partitoiner) const;
+  bool CanOmitHashRepartition(const std::vector<Attribute>& join_key_list,
+                              const PlanPartitioner& partitoiner) const;
   /**
    * @brief Method description:Check whether two partition_keys in the same
    * join_pair.
@@ -149,11 +152,13 @@ class LogicalEqualJoin : public LogicalOperator {
    * TODO(admin): Consider not only data size but also other factors, such as
    * parallelism, resource, etc.
    */
-  JoinPolicy DecideLeftOrRightRepartition(const PlanContext& left_dataflow,
-                                          const PlanContext& right_dataflow) const;
+  JoinPolicy DecideLeftOrRightRepartition(
+      const PlanContext& left_dataflow,
+      const PlanContext& right_dataflow) const;
 
   PlanPartitioner DecideOutputDataflowProperty(
-      const PlanContext& left_dataflow, const PlanContext& right_dataflow) const;
+      const PlanContext& left_dataflow,
+      const PlanContext& right_dataflow) const;
   void Print(int level = 0) const;
 
   /**
@@ -173,13 +178,14 @@ class LogicalEqualJoin : public LogicalOperator {
       const Attribute& attr_left, const Attribute& attr_right) const;
 
  private:
+  std::vector<ExprNode*> join_condi_;
   std::vector<JoinPair> joinkey_pair_list_;
   std::vector<Attribute> left_join_key_list_;
   std::vector<Attribute> right_join_key_list_;
   LogicalOperator* left_child_;
   LogicalOperator* right_child_;
   JoinPolicy join_policy_;
-  PlanContext* dataflow_;
+  PlanContext* plan_context_;
 };
 }  // namespace logical_operator
 }  // namespace claims

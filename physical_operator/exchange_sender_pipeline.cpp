@@ -27,12 +27,15 @@
 
 #include "../physical_operator/exchange_sender_pipeline.h"
 
+#include <glog/raw_logging.h>
 #include <malloc.h>
+#include <stack>
+
 #include "../../configure.h"
 #include "../../common/rename.h"
 #include "../../common/Logging.h"
 #include "../../common/ids.h"
-#include "../../common/log/logging.h"
+//#include "../../common/log/logging.h"
 #include "../../Environment.h"
 #include "../../utility/ThreadSafe.h"
 #include "../../utility/rdtsc.h"
@@ -40,11 +43,33 @@
 namespace claims {
 namespace physical_operator {
 
-ExchangeSenderPipeline::ExchangeSenderPipeline(State state) : state_(state) {
+ExchangeSenderPipeline::ExchangeSenderPipeline(State state)
+    : state_(state),
+      sender_thread_id_(0),
+      partitioned_block_stream_(NULL),
+      partitioned_data_buffer_(NULL),
+      block_for_asking_(NULL),
+      block_for_sending_buffer_(NULL),
+      block_for_serialization_(NULL),
+      sending_buffer_(NULL),
+      partition_function_(NULL),
+      socket_fd_upper_list_(NULL) {
+  set_phy_oper_type(kphysicalExchangeSender);
   assert(state.partition_schema_.partition_key_index < 100);
 }
 
-ExchangeSenderPipeline::ExchangeSenderPipeline() {}
+ExchangeSenderPipeline::ExchangeSenderPipeline()
+    : sender_thread_id_(0),
+      partitioned_block_stream_(NULL),
+      partitioned_data_buffer_(NULL),
+      block_for_asking_(NULL),
+      block_for_sending_buffer_(NULL),
+      block_for_serialization_(NULL),
+      sending_buffer_(NULL),
+      partition_function_(NULL),
+      socket_fd_upper_list_(NULL) {
+  set_phy_oper_type(kphysicalExchangeSender);
+}
 
 ExchangeSenderPipeline::~ExchangeSenderPipeline() {
   if (NULL != state_.schema_) {
@@ -60,8 +85,12 @@ ExchangeSenderPipeline::~ExchangeSenderPipeline() {
  * pay attention to the work of different block buffer according to the
  * comments near it
  */
-bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
-  state_.child_->Open(state_.partition_offset_);
+bool ExchangeSenderPipeline::Open(SegmentExecStatus* const exec_status,
+                                  const PartitionOffset&) {
+  RETURN_IF_CANCELLED(exec_status);
+  state_.child_->Open(exec_status, state_.partition_offset_);
+  RETURN_IF_CANCELLED(exec_status);
+
   upper_num_ = state_.upper_id_list_.size();
   partition_function_ =
       PartitionFunctionFactory::createBoostHashFunction(upper_num_);
@@ -110,10 +139,13 @@ bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
     partitioned_block_stream_[i] =
         BlockStreamBase::createBlock(state_.schema_, state_.block_size_);
   }
+  RETURN_IF_CANCELLED(exec_status);
 
   /** connect to all the mergers **/
   for (unsigned upper_offset = 0; upper_offset < state_.upper_id_list_.size();
        ++upper_offset) {
+    RETURN_IF_CANCELLED(exec_status);
+
     LOG(INFO) << "(exchane_id= " << state_.exchange_id_
               << " partition_offset= " << state_.partition_offset_
               << " ) try to connect to upper( " << upper_offset << " , "
@@ -126,11 +158,12 @@ bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
       return false;
     }
   }
-  LOG(INFO) << "successfully !" << std::endl;
+  LOG(INFO) << "connect to all mereger successfully !" << std::endl;
+
+  RETURN_IF_CANCELLED(exec_status);
 
   /** create the Sender thread **/
-  int error;
-  error = pthread_create(&sender_thread_id_, NULL, Sender, this);
+  int error = pthread_create(&sender_thread_id_, NULL, Sender, this);
   if (error != 0) {
     LOG(ERROR) << "(exchane_id= " << state_.exchange_id_
                << " partition_offset= " << state_.partition_offset_
@@ -150,12 +183,17 @@ bool ExchangeSenderPipeline::Open(const PartitionOffset&) {
  * else the state_.partition_schema_ is broadcast, straightly insert the block
  * from child into each partition buffer.
  */
-bool ExchangeSenderPipeline::Next(BlockStreamBase* no_block) {
+bool ExchangeSenderPipeline::Next(SegmentExecStatus* const exec_status,
+                                  BlockStreamBase* no_block) {
   void* tuple_from_child;
   void* tuple_in_cur_block_stream;
   while (true) {
+    RETURN_IF_CANCELLED(exec_status);
+
     block_for_asking_->setEmpty();
-    if (state_.child_->Next(block_for_asking_)) {
+    if (state_.child_->Next(exec_status, block_for_asking_)) {
+      RETURN_IF_CANCELLED(exec_status);
+
       /**
        * if a blocks is obtained from child, we repartition the tuples in the
        * block to corresponding partition_block_stream_.
@@ -197,7 +235,8 @@ bool ExchangeSenderPipeline::Next(BlockStreamBase* no_block) {
           state_.schema_->copyTuple(tuple_from_child,
                                     tuple_in_cur_block_stream);
         }
-      } else if (state_.partition_schema_.isBoardcastPartition()) {
+        DELETE_PTR(traverse_iterator);  // by hAN MEMORY LEAK
+      } else if (state_.partition_schema_.isBroadcastPartition()) {
         /**
          * for boardcast case, all block from child should inserted into all
          * partitioned_data_buffer
@@ -209,23 +248,35 @@ bool ExchangeSenderPipeline::Next(BlockStreamBase* no_block) {
         }
       }
     } else {
-      /* the child iterator is exhausted. We add the last block stream block
-       * which would be not full into the buffer for hash partitioned case.
-       */
+      RETURN_IF_CANCELLED(exec_status);
+
       if (state_.partition_schema_.isHashPartition()) {
+        /* the child iterator is exhausted. We add the last block stream block
+         * which would be not full into the buffer for hash partitioned case.
+         */
         for (unsigned i = 0; i < upper_num_; ++i) {
           partitioned_block_stream_[i]->serialize(*block_for_serialization_);
           partitioned_data_buffer_->insertBlockToPartitionedList(
               block_for_serialization_, i);
         }
-      }
-      /* The following lines send an empty block to the upper, indicating that
-       * all the data from current sent has been transmit to the uppers.
-       */
-      for (unsigned i = 0; i < upper_num_; ++i) {
-        if (!partitioned_block_stream_[i]->Empty()) {
-          partitioned_block_stream_[i]->setEmpty();
-          partitioned_block_stream_[i]->serialize(*block_for_serialization_);
+        /* The following lines send an empty block to the upper, indicating that
+         * all the data from current sent has been transmit to the uppers.
+         */
+        for (unsigned i = 0; i < upper_num_; ++i) {
+          if (!partitioned_block_stream_[i]->Empty()) {
+            partitioned_block_stream_[i]->setEmpty();
+            partitioned_block_stream_[i]->serialize(*block_for_serialization_);
+            partitioned_data_buffer_->insertBlockToPartitionedList(
+                block_for_serialization_, i);
+          }
+        }
+      } else if (state_.partition_schema_.isBroadcastPartition()) {
+        /* The following lines send an empty block to the upper, indicating that
+         * all the data from current sent has been transmit to the uppers.
+         */
+        block_for_asking_->setEmpty();
+        block_for_asking_->serialize(*block_for_serialization_);
+        for (unsigned i = 0; i < upper_num_; ++i) {
           partitioned_data_buffer_->insertBlockToPartitionedList(
               block_for_serialization_, i);
         }
@@ -239,7 +290,11 @@ bool ExchangeSenderPipeline::Next(BlockStreamBase* no_block) {
                 << " partition_offset= " << state_.partition_offset_
                 << " ) Waiting until all the blocks in the buffer is sent!"
                 << std::endl;
+      RETURN_IF_CANCELLED(exec_status);
+
       while (!partitioned_data_buffer_->isEmpty()) {
+        RETURN_IF_CANCELLED(exec_status);
+
         usleep(1);
       }
 
@@ -253,17 +308,22 @@ bool ExchangeSenderPipeline::Next(BlockStreamBase* no_block) {
                 << " partition_offset= " << state_.partition_offset_
                 << " ) Waiting for close notification from all merger!"
                 << std::endl;
+      RETURN_IF_CANCELLED(exec_status);
+
       for (unsigned i = 0; i < upper_num_; i++) {
+        RETURN_IF_CANCELLED(exec_status);
+
         WaitingForCloseNotification(socket_fd_upper_list_[i]);
       }
+      LOG(INFO) << " received all close notification, closing.. " << endl;
       return false;
     }
   }
 }
 
-bool ExchangeSenderPipeline::Close() {
+bool ExchangeSenderPipeline::Close(SegmentExecStatus* const exec_status) {
   CancelSenderThread();
-  state_.child_->Close();
+  state_.child_->Close(exec_status);
   // free temporary space
   if (NULL != partitioned_data_buffer_) {
     delete partitioned_data_buffer_;
@@ -281,11 +341,13 @@ bool ExchangeSenderPipeline::Close() {
     delete sending_buffer_;
     sending_buffer_ = NULL;
   }
+
   if (NULL != block_for_sending_buffer_) {
     delete block_for_sending_buffer_;
     block_for_sending_buffer_ = NULL;
   }
-  for (unsigned i = 0; i < upper_num_; i++) {
+  for (unsigned i = 0; NULL != partitioned_block_stream_ && i < upper_num_;
+       i++) {
     if (NULL != partitioned_block_stream_[i]) {
       delete partitioned_block_stream_[i];
       partitioned_block_stream_[i] = NULL;
@@ -313,28 +375,33 @@ bool ExchangeSenderPipeline::Close() {
 void* ExchangeSenderPipeline::Sender(void* arg) {
   ExchangeSenderPipeline* Pthis =
       reinterpret_cast<ExchangeSenderPipeline*>(arg);
-  LOG(INFO) << "(exchange_id = " << Pthis->state_.exchange_id_
-            << " , partition_offset = " << Pthis->state_.partition_offset_
-            << " ) sender thread created successfully!" << std::endl;
+  pthread_testcancel();
+
+  //  LOG(INFO) << "(exchange_id = " << Pthis->state_.exchange_id_
+  //            << " , partition_offset = " << Pthis->state_.partition_offset_
+  //            << " ) sender thread created successfully!";
+  RAW_LOG(INFO,
+          "exchange_id= %d, par_off= %d sender thread is created successfully!",
+          Pthis->state_.exchange_id_, Pthis->state_.partition_offset_);
   Pthis->sending_buffer_->Initialized();
   Pthis->sendedblocks_ = 0;
   try {
     while (true) {
       pthread_testcancel();
       bool consumed = false;
-      BlockContainer* block_for_sending;
+      BlockContainer* block_for_sending = NULL;
       int partition_id =
           Pthis->sending_buffer_->getBlockForSending(block_for_sending);
       if (partition_id >= 0) {
         // get one block from sending_buffer which isn't empty
         pthread_testcancel();
-        if (block_for_sending->GetRestSize() > 0) {
+        if (block_for_sending->GetRestSizeToHandle() > 0) {
           int recvbytes;
           recvbytes =
               send(Pthis->socket_fd_upper_list_[partition_id],
                    reinterpret_cast<char*>(block_for_sending->getBlock()) +
                        block_for_sending->GetCurSize(),
-                   block_for_sending->GetRestSize(), MSG_DONTWAIT);
+                   block_for_sending->GetRestSizeToHandle(), MSG_DONTWAIT);
           if (recvbytes == -1) {
             if (errno == EAGAIN) {
               continue;
@@ -347,15 +414,17 @@ void* ExchangeSenderPipeline::Sender(void* arg) {
                        << std::endl;
             break;
           } else {
-            if (recvbytes < block_for_sending->GetRestSize()) {
-              /* the block is not entirely sent. */
+            if (recvbytes < block_for_sending->GetRestSizeToHandle()) {
+/* the block is not entirely sent. */
+#ifdef GLOG_STATUS
+
               LOG(INFO)
                   << "(exchange_id = " << Pthis->state_.exchange_id_
                   << " , partition_offset = " << Pthis->state_.partition_offset_
                   << " ) doesn't send a block completely, actual send bytes = "
-                  << recvbytes
-                  << " rest bytes = " << block_for_sending->GetRestSize()
-                  << std::endl;
+                  << recvbytes << " rest bytes = "
+                  << block_for_sending->GetRestSizeToHandle() << std::endl;
+#endif
               block_for_sending->IncreaseActualSize(recvbytes);
               continue;
             } else {
@@ -373,29 +442,27 @@ void* ExchangeSenderPipeline::Sender(void* arg) {
                     Pthis->sendedblocks_, recvbytes,
                     block_for_sending_->GetRestSize(),
                     Pthis->state_.upper_id_list_[partition_id]);
-                LOG(INFO) << "[ExchangeEagerLower]: " << "["
-                    << Pthis->state_.exchange_id_ << ","
-                    << Pthis->state_.partition_offset_ << "]Send
-                    the "
-                    << Pthis->sendedblocks_ << " block(bytes=" <<
-                    recvbytes
-                    << ", rest size=" <<
-                    block_for_sending_->GetRestSize()
-                    << ") to [" <<
-                    Pthis->state_.upper_id_list_[partition_id]
-                    << "]" << std::endl;
-                cout << "[ExchangeEagerLower]: " << "["
-                    << Pthis->state_.exchange_id_ << ","
-                    << Pthis->state_.partition_offset_ << "]Send
-                    the "
-                    << Pthis->sendedblocks_ << " block(bytes=" <<
-                    recvbytes
-                    << ", rest size=" <<
-                    block_for_sending_->GetRestSize()
-                    << ") to [" <<
-                    Pthis->state_.upper_id_list_[partition_id]
-                    << "]" << std::endl;
-                */
+              LOG(INFO) << "[ExchangeEagerLower]: "
+                        << "[" << Pthis->state_.exchange_id_ << ","
+                        << Pthis->state_.partition_offset_ << "]Send the "
+                        << Pthis->sendedblocks_ << " block(bytes=" << recvbytes
+                        << ", rest size=" <<
+              block_for_sending->GetRestSizeToHandle()
+                        << ") to ["
+                        << Pthis->state_.upper_id_list_[partition_id] << "]"
+                        << std::endl;
+                            cout << "[ExchangeEagerLower]: " << "["
+                                  << Pthis->state_.exchange_id_ << ","
+                                  << Pthis->state_.partition_offset_ << "]Send
+                                  the "
+                                  << Pthis->sendedblocks_ << " block(bytes=" <<
+                                  recvbytes
+                                  << ", rest size=" <<
+                                  block_for_sending_->GetRestSize()
+                                  << ") to [" <<
+                                  Pthis->state_.upper_id_list_[partition_id]
+                                  << "]" << std::endl;
+                              */
               consumed = true;
             }
           }
@@ -432,20 +499,32 @@ void* ExchangeSenderPipeline::Sender(void* arg) {
         }
       }
     }
-  } catch (std::exception e) {
-    pthread_testcancel();
+  } catch (std::exception& e) {
+    pthread_cancel(pthread_self());
   }
 }
 
 void ExchangeSenderPipeline::CancelSenderThread() {
-  pthread_cancel(sender_thread_id_);
-  void* res;
-  pthread_join(sender_thread_id_, &res);
-  if (res != PTHREAD_CANCELED)
-    LOG(WARNING) << "(exchange_id = " << state_.exchange_id_
-                 << " , partition_offset = " << state_.partition_offset_
-                 << " ) thread is not canceled!" << std::endl;
-  sender_thread_id_ = 0;
+  if (0 != sender_thread_id_) {
+    pthread_cancel(sender_thread_id_);
+    void* res;
+    pthread_join(sender_thread_id_, &res);
+    if (res != PTHREAD_CANCELED)
+      LOG(WARNING) << "(exchange_id = " << state_.exchange_id_
+                   << " , partition_offset = " << state_.partition_offset_
+                   << " ) thread is not canceled!" << std::endl;
+    LOG(INFO) << "(exchange_id = " << state_.exchange_id_
+              << " , partition_offset = " << state_.partition_offset_
+              << " ) thread is canceled!" << std::endl;
+    sender_thread_id_ = 0;
+  }
+}
+RetCode ExchangeSenderPipeline::GetAllSegments(stack<Segment*>* all_segments) {
+  RetCode ret = rSuccess;
+  if (NULL != state_.child_) {
+    return state_.child_->GetAllSegments(all_segments);
+  }
+  return ret;
 }
 }  // namespace physical_operator
 }  // namespace claims

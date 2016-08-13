@@ -28,6 +28,9 @@
 
 #ifndef PHYSICAL_OPERATOR_PHYSICAL_FILTER_H_
 #define PHYSICAL_OPERATOR_PHYSICAL_FILTER_H_
+#include <stack>
+
+#include "../common/error_define.h"
 
 #define GLOG_NO_ABBREVIATED_SEVERITIES
 #include <boost/serialization/map.hpp>
@@ -44,13 +47,15 @@
 #include "../common/Block/BlockStream.h"
 #include "../utility/lock.h"
 #include "../common/AttributeComparator.h"
-#include "../common/ExpressionItem.h"
 #include "../common/Mapping.h"
-#include "../Catalog/Attribute.h"
+#include "../catalog/attribute.h"
 #include "../physical_operator/physical_project.h"
 #include "../common/Expression/qnode.h"
 #include "../codegen/ExpressionGenerator.h"
 #include "../common/error_no.h"
+#include "../common/expression/expr_node.h"
+using claims::common::ExprEvalCnxt;
+using claims::common::ExprNode;
 
 namespace claims {
 namespace physical_operator {
@@ -66,6 +71,8 @@ class PhysicalFilter : public PhysicalOperator {
     BlockStreamBase* temp_block_;
     BlockStreamBase::BlockStreamTraverseIterator* block_stream_iterator_;
     vector<QNode*> thread_qual_;
+    vector<ExprNode*> thread_condi_;
+    ExprEvalCnxt expr_eval_cnxt_;
     ~FilterThreadContext();
   };
 
@@ -89,7 +96,7 @@ class PhysicalFilter : public PhysicalOperator {
    public:
     friend class PhysicalFilter;
     State(Schema* schema, PhysicalOperatorBase* child, vector<QNode*> qual,
-          map<string, int> column_id, unsigned block_size);
+          unsigned block_size);
     State(Schema* s, PhysicalOperatorBase* child,
           std::vector<AttributeComparator> comparator_list,
           unsigned block_size);
@@ -100,14 +107,14 @@ class PhysicalFilter : public PhysicalOperator {
     PhysicalOperatorBase* child_;
     unsigned block_size_;
     vector<QNode*> qual_;
+    vector<ExprNode*> condition_;
     std::vector<AttributeComparator> comparator_list_;
-    map<string, int> column_id_;
 
    private:
     friend class boost::serialization::access;
     template <class Archive>
     void serialize(Archive& ar, const unsigned int version) {
-      ar& schema_& child_& block_size_& qual_& comparator_list_& column_id_;
+      ar& schema_& child_& block_size_& qual_& comparator_list_& condition_;
     }
   };
 
@@ -118,18 +125,20 @@ class PhysicalFilter : public PhysicalOperator {
   /**
    * @brief: choose which way to generate filter function
    */
-  bool Open(const PartitionOffset& kPartitionOffset);
+  bool Open(SegmentExecStatus* const exec_status,
+            const PartitionOffset& kPartitionOffset);
 
   /**
    * @brief: fetch a block from child and execute ProcessInLogic
    */
-  bool Next(BlockStreamBase* block);
+  bool Next(SegmentExecStatus* const exec_status, BlockStreamBase* block);
 
   /**
    * @brief: revoke resource
    */
-  bool Close();
+  bool Close(SegmentExecStatus* const exec_status);
   void Print();
+  RetCode GetAllSegments(stack<Segment*>* all_segments);
 
  private:
   /**

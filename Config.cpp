@@ -9,6 +9,7 @@
 #include "Debug.h"
 #include <stdlib.h>
 #include <libconfig.h++>
+#include <unistd.h>
 #include <iosfwd>
 #include <iostream>
 #include <string>
@@ -19,9 +20,9 @@ using namespace std;
 string gete() {
   char *p = getenv("CLAIMS_HOME");
   stringstream sp;
-  sp << string(p).c_str() << "/conf/config";
+  sp << string(p).c_str() << "conf/config";
   return sp.str();
-//	return "/home/imdb/config/wangli/config";
+  //	return "/home/imdb/config/wangli/config";
 }
 string get_default_logfile_name() {
   char *p = getenv("CLAIMS_HOME");
@@ -30,7 +31,7 @@ string get_default_logfile_name() {
   return sp.str();
 }
 std::string Config::config_file;
-Config* Config::instance_ = 0;
+Config *Config::instance_ = 0;
 
 /**
  * This parameter specifies the maximum degrees of parallelism
@@ -85,16 +86,19 @@ bool Config::enable_codegen;
 
 std::string Config::catalog_file;
 
-Config* Config::getInstance() {
+int Config::thread_pool_init_thread_num;
+
+int Config::load_thread_num;
+int Config::memory_utilization;
+
+Config *Config::getInstance() {
   if (instance_ == 0) {
     instance_ = new Config();
   }
   return instance_;
 }
 
-Config::Config() {
-  initialize();
-}
+Config::Config() { initialize(); }
 
 Config::~Config() {
   // TODO Auto-generated destructor stub
@@ -109,15 +113,16 @@ void Config::initialize() {
   cfg.readFile(config_file.c_str());
 
   /*
-   * The following lines set the search attribute name and default value for each parameter.
+   * The following lines set the search attribute name and default value for
+   * each parameter.
    */
 
-  data_dir = getString("data", "/home/claims/data/");
+  data_dir = getString("data", "/home/imdb/data/");
 
   max_degree_of_parallelism = getInt("max_degree_of_parallelism", 4);
 
-  expander_adaptivity_check_frequency = getInt(
-      "expander_adaptivity_check_frequency", 1000);
+  expander_adaptivity_check_frequency =
+      getInt("expander_adaptivity_check_frequency", 1000);
 
   enable_expander_adaptivity = getBoolean("enable_expander_adaptivity", false);
 
@@ -125,7 +130,7 @@ void Config::initialize() {
 
   scan_batch = getInt("scan_batch", 10);
 
-  hdfs_master_ip = getString("hdfs_master_ip", "10.11.1.190");
+  hdfs_master_ip = getString("hdfs_master_ip", "10.11.1.192");
 
   hdfs_master_port = getInt("hdfs_master_port", 9000);
 
@@ -139,9 +144,15 @@ void Config::initialize() {
 
   client_listener_port = getInt("client_listener_port", 10001);
 
-  catalog_file = getString("catalog_file", "catalogData.dat");
+  catalog_file = getString("catalog_file", data_dir + "CATALOG");
 
   enable_codegen = getBoolean("enable_codegen", true);
+
+  thread_pool_init_thread_num = getInt("thread_pool_init_thread_num", 100);
+
+  load_thread_num = getInt("load_thread_num", sysconf(_SC_NPROCESSORS_CONF));
+
+  memory_utilization = getInt("memory_utilization", 100);
 
 #ifdef DEBUG_Config
   print_configure();
@@ -152,7 +163,7 @@ std::string Config::getString(std::string attribute_name,
                               std::string default_value) {
   std::string ret;
   try {
-    ret = (const char*) cfg.lookup(attribute_name.c_str());
+    ret = (const char *)cfg.lookup(attribute_name.c_str());
   } catch (libconfig::SettingNotFoundException &e) {
     ret = default_value;
   }
@@ -172,7 +183,7 @@ int Config::getInt(std::string attribute_name, int default_value) {
 bool Config::getBoolean(std::string attribute_name, bool defalut_value) {
   bool ret;
   try {
-    ret = ((int) cfg.lookup(attribute_name.c_str())) == 1;
+    ret = ((int)cfg.lookup(attribute_name.c_str())) == 1;
   } catch (libconfig::SettingNotFoundException &e) {
     ret = defalut_value;
   }
@@ -200,8 +211,7 @@ void Config::print_configure() const {
   std::cout << "client_lisener_port:" << client_listener_port << std::endl;
   std::cout << "catalog_file:" << catalog_file << std::endl;
   std::cout << "codegen:" << enable_codegen << std::endl;
+  std::cout << "load_thread_num:" << load_thread_num << std::endl;
 }
 
-void Config::setConfigFile(std::string file_name) {
-  config_file = file_name;
-}
+void Config::setConfigFile(std::string file_name) { config_file = file_name; }

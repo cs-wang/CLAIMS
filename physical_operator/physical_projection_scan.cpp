@@ -34,6 +34,8 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <limits.h>
+#include <stack>
+
 #include "../common/rename.h"
 #include "../storage/BlockManager.h"
 #include "../Config.h"
@@ -41,18 +43,21 @@
 #include "../storage/ChunkStorage.h"
 #include "../Executor/expander_tracker.h"
 #include "../storage/PartitionStorage.h"
-
-using namespace claims::common;
+using claims::common::rNoPartitionIdScan;
+using claims::common::rSuccess;
+using claims::common::rCodegenFailed;
 
 namespace claims {
 namespace physical_operator {
 PhysicalProjectionScan::PhysicalProjectionScan(State state)
-    : state_(state), partition_reader_iterator_(NULL) {
+    : state_(state), partition_reader_iterator_(NULL), perf_info_(NULL) {
+  set_phy_oper_type(kPhysicalScan);
   InitExpandedStatus();
 }
 
 PhysicalProjectionScan::PhysicalProjectionScan()
-    : partition_reader_iterator_(NULL) {
+    : partition_reader_iterator_(NULL), perf_info_(NULL) {
+  set_phy_oper_type(kPhysicalScan);
   InitExpandedStatus();
 }
 
@@ -61,6 +66,10 @@ PhysicalProjectionScan::~PhysicalProjectionScan() {
     delete state_.schema_;
     state_.schema_ = NULL;
   }
+  //  if (NULL != perf_info_) {
+  //    delete perf_info_;
+  //    perf_info_ = NULL;
+  //  }
 }
 
 PhysicalProjectionScan::State::State(ProjectionID projection_id, Schema* schema,
@@ -76,21 +85,25 @@ PhysicalProjectionScan::State::State(ProjectionID projection_id, Schema* schema,
  * decide if it generates a buffer.
  */
 
-bool PhysicalProjectionScan::Open(const PartitionOffset& kPartitionOffset) {
+bool PhysicalProjectionScan::Open(SegmentExecStatus* const exec_status,
+                                  const PartitionOffset& kPartitionOffset) {
+  RETURN_IF_CANCELLED(exec_status);
+
+  RegisterExpandedThreadToAllBarriers();
+
   if (TryEntryIntoSerializedSection()) {
     /* this is the first expanded thread*/
     PartitionStorage* partition_handle_;
     if (NULL ==
-        (partition_handle_ = BlockManager::getInstance()->getPartitionHandle(
+        (partition_handle_ = BlockManager::getInstance()->GetPartitionHandle(
              PartitionID(state_.projection_id_, kPartitionOffset)))) {
       LOG(ERROR) << PartitionID(state_.projection_id_, kPartitionOffset)
                         .getName()
-                        .c_str() << kErrorMessage[kNoPartitionIdScan]
-                 << std::endl;
+                        .c_str() << CStrError(rNoPartitionIdScan) << std::endl;
       SetReturnStatus(false);
     } else {
       partition_reader_iterator_ =
-          partition_handle_->createAtomicReaderIterator();
+          partition_handle_->CreateAtomicReaderIterator();
       SetReturnStatus(true);
     }
 
@@ -99,18 +112,18 @@ bool PhysicalProjectionScan::Open(const PartitionOffset& kPartitionOffset) {
 
     ChunkReaderIterator* chunk_reader_it;
     ChunkReaderIterator::block_accessor* ba;
-    while (chunk_reader_it = partition_reader_iterator_->nextChunk()) {
-      while (chunk_reader_it->getNextBlockAccessor(ba)) {
-        ba->getBlockSize();
+    while (chunk_reader_it = partition_reader_iterator_->NextChunk()) {
+      while (chunk_reader_it->GetNextBlockAccessor(ba)) {
+        ba->GetBlockSize();
         input_dataset_.input_data_blocks_.push_back(ba);
       }
     }
 #endif
     ExpanderTracker::getInstance()->addNewStageEndpoint(
         pthread_self(), LocalStageEndPoint(stage_src, "Scan", 0));
-    kPerfInfo =
+    perf_info_ =
         ExpanderTracker::getInstance()->getPerformanceInfo(pthread_self());
-    kPerfInfo->initialize();
+    perf_info_->initialize();
   }
   BarrierArrive();
   return GetReturnStatus();
@@ -126,8 +139,14 @@ bool PhysicalProjectionScan::Open(const PartitionOffset& kPartitionOffset) {
 
 // TODO(Hanzhang): According to AVOID_CONTENTION_IN_SCAN, we choose the
 // strategy. We need finish case(1).
-bool PhysicalProjectionScan::Next(BlockStreamBase* block) {
+bool PhysicalProjectionScan::Next(SegmentExecStatus* const exec_status,
+                                  BlockStreamBase* block) {
+  RETURN_IF_CANCELLED(exec_status);
+
   unsigned long long total_start = curtick();
+  if (!block->isIsReference()) {
+    block->setIsReference(false);
+  }
 #ifdef AVOID_CONTENTION_IN_SCAN
   ScanThreadContext* stc = reinterpret_cast<ScanThreadContext*>(GetContext());
   if (NULL == stc) {
@@ -147,7 +166,7 @@ bool PhysicalProjectionScan::Next(BlockStreamBase* block) {
     ChunkReaderIterator::block_accessor* ba = stc->assigned_data_.front();
     stc->assigned_data_.pop_front();
 
-    ba->getBlock(block);
+    ba->GetBlock(block);
 
     // whether delete InMemeryBlockAccessor::target_block_start_address
     // is depend on whether use copy in ba->getBlock(block);
@@ -171,14 +190,15 @@ bool PhysicalProjectionScan::Next(BlockStreamBase* block) {
           pthread_self())) {
     return false;
   }
-  kPerfInfo->processed_one_block();
+  //  perf_info_->processed_one_block();
   // case(2)
-  return partition_reader_iterator_->nextBlock(block);
+  RETURN_IF_CANCELLED(exec_status);
+  return partition_reader_iterator_->NextBlock(block);
 
 #endif
 }
 
-bool PhysicalProjectionScan::Close() {
+bool PhysicalProjectionScan::Close(SegmentExecStatus* const exec_status) {
   if (NULL != partition_reader_iterator_) {
     delete partition_reader_iterator_;
     partition_reader_iterator_ = NULL;
@@ -198,6 +218,8 @@ bool PhysicalProjectionScan::PassSample() const {
   if ((rand() / (float)RAND_MAX) < state_.sample_rate_) return true;
   return false;
 }
-
+RetCode PhysicalProjectionScan::GetAllSegments(stack<Segment*>* all_segments) {
+  return rSuccess;
+}
 }  // namespace physical_operator
 }  // namespace claims

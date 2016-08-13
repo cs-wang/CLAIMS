@@ -27,27 +27,37 @@
  */
 
 #include "../logical_operator/logical_filter.h"
+#include <string>
+#include <map>
 #include <vector>
+
+#include "../catalog/stat/Estimation.h"
+#include "../catalog/stat/StatManager.h"
 #include "../IDsGenerator.h"
-#include "../Catalog/stat/StatManager.h"
-#include "../Catalog/stat/Estimation.h"
 #include "../common/AttributeComparator.h"
+#include "../common/expression/expr_node.h"
 #include "../common/TypePromotionMap.h"
 #include "../common/TypeCast.h"
 #include "../common/Expression/initquery.h"
 #include "../physical_operator/exchange_merger.h"
 #include "../physical_operator/physical_filter.h"
 
+using claims::common::LogicInitCnxt;
 using claims::physical_operator::ExchangeMerger;
 using claims::physical_operator::PhysicalFilter;
 namespace claims {
 namespace logical_operator {
 
 LogicalFilter::LogicalFilter(LogicalOperator* child, vector<QNode*> qual)
-    : child_(child), condi_(qual) {
-  set_operator_type(kLogicalFilter);
-}
-
+    : LogicalOperator(kLogicalFilter),
+      child_(child),
+      condi_(qual),
+      plan_context_(NULL) {}
+LogicalFilter::LogicalFilter(LogicalOperator* child, vector<ExprNode*> condi)
+    : LogicalOperator(kLogicalFilter),
+      child_(child),
+      condition_(condi),
+      plan_context_(NULL) {}
 LogicalFilter::~LogicalFilter() {
   if (NULL != child_) {
     delete child_;
@@ -59,6 +69,11 @@ PlanContext LogicalFilter::GetPlanContext() {
   /** In the currently implementation, we assume that the boolean operator
    * between each AttributeComparator is "AND".
    */
+  lock_->acquire();
+  if (NULL != plan_context_) {
+    lock_->release();
+    return *plan_context_;
+  }
   PlanContext plan_context = child_->GetPlanContext();
   if (plan_context.IsHashPartitioned()) {
     for (unsigned i = 0;
@@ -73,6 +88,7 @@ PlanContext LogicalFilter::GetPlanContext() {
                  *               of the input data, which may be maintained in the
                  *               catalog module.
                  */
+
         const unsigned before_filter_cardinality =
             plan_context.plan_partitioner_.GetPartition(i)->get_cardinality();
         const unsigned after_filter_cardinality =
@@ -82,13 +98,29 @@ PlanContext LogicalFilter::GetPlanContext() {
       }
     }
   }
-  set_column_id(plan_context);
-  Schema* input_ = GetSchema(plan_context.attribute_list_);
+//  std::map<std::string, int> column_to_id;
+//  GetColumnToId(plan_context.attribute_list_, column_to_id);
+//  Schema* input_schema = GetSchema(plan_context.attribute_list_);
+#ifdef NEWCONDI
   for (int i = 0; i < condi_.size(); ++i) {
     // Initialize expression of logical execution plan.
-    InitExprAtLogicalPlan(condi_[i], t_boolean, column_id_, input_);
+    InitExprAtLogicalPlan(condi_[i], t_boolean, column_to_id, input_schema);
   }
-  return plan_context;
+#else
+  LogicInitCnxt licnxt;
+  GetColumnToId(plan_context.attribute_list_, licnxt.column_id0_);
+  licnxt.schema0_ = plan_context.GetSchema();
+  for (int i = 0; i < condition_.size(); ++i) {
+    licnxt.return_type_ = t_boolean;
+    condition_[i]->InitExprAtLogicalPlan(licnxt);
+  }
+#endif
+  plan_context_ = new PlanContext();
+  *plan_context_ = plan_context;
+  plan_context_->attribute_list_.assign(plan_context.attribute_list_.begin(),
+                                        plan_context.attribute_list_.end());
+  lock_->release();
+  return *plan_context_;
 }
 
 PhysicalOperatorBase* LogicalFilter::GetPhysicalPlan(
@@ -99,7 +131,7 @@ PhysicalOperatorBase* LogicalFilter::GetPhysicalPlan(
   state.block_size_ = blocksize;
   state.child_ = child_iterator;
   state.qual_ = condi_;
-  state.column_id_ = column_id_;
+  state.condition_ = condition_;
   state.schema_ = GetSchema(plan_context.attribute_list_);
   PhysicalOperatorBase* filter = new PhysicalFilter(state);
   return filter;
@@ -120,7 +152,7 @@ bool LogicalFilter::GetOptimalPhysicalPlan(
       state.block_size_ = block_size;
       state.child_ = physical_plan.plan;
       state.qual_ = condi_;
-      state.column_id_ = column_id_;
+      state.condition_ = condition_;
       PlanContext plan_context = GetPlanContext();
       state.schema_ = GetSchema(plan_context.attribute_list_);
       PhysicalOperatorBase* filter = new PhysicalFilter(state);
@@ -136,7 +168,7 @@ bool LogicalFilter::GetOptimalPhysicalPlan(
       state_f.block_size_ = block_size;
       state_f.child_ = physical_plan.plan;
       state_f.qual_ = condi_;
-      state_f.column_id_ = column_id_;
+      state_f.condition_ = condition_;
       PlanContext plan_context = GetPlanContext();
       state_f.schema_ = GetSchema(plan_context.attribute_list_);
       PhysicalOperatorBase* filter = new PhysicalFilter(state_f);
@@ -169,22 +201,16 @@ bool LogicalFilter::GetOptimalPhysicalPlan(
         }
       }
       state.upper_id_list_ = upper_id_list;
-
       assert(requirement.hasReuiredPartitionKey());
-
       state.partition_schema_ =
           partition_schema::set_hash_partition(this->GetIdInAttributeList(
               physical_plan.plan_context_.attribute_list_,
               requirement.getPartitionKey()));
       assert(state.partition_schema_.partition_key_index >= 0);
-
       std::vector<NodeID> lower_id_list =
           GetInvolvedNodeID(physical_plan.plan_context_.plan_partitioner_);
-
       state.lower_id_list_ = lower_id_list;
-
       PhysicalOperatorBase* exchange = new ExchangeMerger(state);
-
       physical_plan.plan = exchange;
     }
     candidate_physical_plans.push_back(physical_plan);
@@ -194,7 +220,6 @@ bool LogicalFilter::GetOptimalPhysicalPlan(
     PhysicalFilter::State state;
     state.block_size_ = block_size;
     state.child_ = physical_plan.plan;
-    state.column_id_ = column_id_;
     PlanContext plan_context = GetPlanContext();
     state.schema_ = GetSchema(plan_context.attribute_list_);
     PhysicalOperatorBase* filter = new PhysicalFilter(state);
@@ -209,16 +234,6 @@ bool LogicalFilter::GetOptimalPhysicalPlan(
     return true;
   else
     return false;
-}
-
-void LogicalFilter::set_column_id(const PlanContext& plan_context) {
-  for (int i = 0; i < plan_context.attribute_list_.size(); ++i) {
-    /**
-     * Traverse the attribute_list_，store the attribute name and index into
-     * column_id.
-     */
-    column_id_[plan_context.attribute_list_[i].attrName] = i;
-  }
 }
 
 /**
@@ -346,12 +361,31 @@ float LogicalFilter::PredictSelectivity() const {
   return ret;
 }
 void LogicalFilter::Print(int level) const {
-  // condition_.print(level);
-  printf("filter:\n");
+  cout << setw(level * kTabSize) << " "
+       << "Filter:" << endl;
+  GetPlanContext();
+  cout << setw(level * kTabSize) << " "
+       << "[Partition info: "
+       << plan_context_->plan_partitioner_.get_partition_key().attrName
+       << " table_id= "
+       << plan_context_->plan_partitioner_.get_partition_key().table_id_
+       << " column_id= "
+       << plan_context_->plan_partitioner_.get_partition_key().index << " ]"
+       << endl;
+#ifdef NEWCONDI
+
   for (int i = 0; i < condi_.size(); ++i) {
     printf("  %s\n", condi_[i]->alias.c_str());
   }
-  child_->Print(level + 1);
+#else
+  ++level;
+  for (int i = 0; i < condition_.size(); ++i) {
+    cout << setw(level * kTabSize) << " " << condition_[i]->alias_ << endl;
+  }
+  --level;
+#endif
+
+  child_->Print(level);
 }
 
 }  // namespace logical_operator
